@@ -22,7 +22,6 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
-# ─── HTML routes ─────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     with connect() as conn:
@@ -30,8 +29,7 @@ def index(request: Request):
             "SELECT * FROM runs ORDER BY started_at DESC LIMIT 50"
         ).fetchall()
     return templates.TemplateResponse(
-        "index.html",
-        {"request": request, "runs": [dict(r) for r in runs]},
+        request, "index.html", {"runs": [dict(r) for r in runs]}
     )
 
 
@@ -48,16 +46,12 @@ def run_detail(request: Request, run_id: str):
             (run_id,),
         ).fetchall()
     return templates.TemplateResponse(
+        request,
         "run_detail.html",
-        {
-            "request": request,
-            "run": dict(run),
-            "benchmarks": [dict(b) for b in benchmarks],
-        },
+        {"run": dict(run), "benchmarks": [dict(b) for b in benchmarks]},
     )
 
 
-# ─── JSON API routes (kept for the agent in Session 3) ───────────────────────
 @app.get("/health")
 def health():
     return {"status": "ok"}
