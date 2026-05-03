@@ -8,6 +8,31 @@ from typing import Any
 from .db import connect
 
 
+REGRESSION_THRESHOLD_PCT = 10.0  # >10% slower = regressed
+
+
+def _find_baseline_value(conn, target: str, name: str, metric: str) -> float | None:
+    """
+    Return the most recent prior value on the main branch for this benchmark.
+    Returns None if no baseline exists yet (first run for this benchmark).
+    """
+    row = conn.execute(
+        """
+        SELECT b.value
+        FROM benchmarks b
+        JOIN runs r ON r.id = b.run_id
+        WHERE r.target = ?
+          AND r.branch = 'main'
+          AND b.name = ?
+          AND b.metric = ?
+        ORDER BY r.started_at DESC
+        LIMIT 1
+        """,
+        (target, name, metric),
+    ).fetchone()
+    return row["value"] if row else None
+
+
 def ingest_pytest_benchmark(
     artifact_path: str | Path,
     *,
@@ -27,7 +52,11 @@ def ingest_pytest_benchmark(
     benchmarks = data.get("benchmarks", [])
     duration = sum(b["stats"]["total"] for b in benchmarks) if benchmarks else 0.0
 
+    # We'll determine status as we walk the benchmarks.
+    has_regression = False
+
     with connect() as conn:
+        # Insert run with placeholder status; we'll update at the end.
         conn.execute(
             """
             INSERT INTO runs (id, target, commit_sha, branch, started_at,
@@ -37,6 +66,7 @@ def ingest_pytest_benchmark(
             (run_id, target, commit_sha, branch, started_at,
              duration, "passed", ci_url, artifact),
         )
+
         for b in benchmarks:
             stats = b["stats"]
             for metric, value, unit in [
@@ -44,10 +74,33 @@ def ingest_pytest_benchmark(
                 ("latency_max_ms", stats["max"] * 1000, "ms"),
                 ("ops_per_sec",    stats["ops"],          "rps"),
             ]:
+                # Look up baseline on main for this benchmark.
+                baseline = _find_baseline_value(conn, target, b["fullname"], metric)
+                delta_pct = None
+                if baseline is not None and baseline > 0:
+                    if metric == "ops_per_sec":
+                        # For throughput, lower is worse.
+                        delta_pct = (baseline - value) / baseline * 100
+                    else:
+                        # For latency, higher is worse.
+                        delta_pct = (value - baseline) / baseline * 100
+                    if delta_pct > REGRESSION_THRESHOLD_PCT:
+                        has_regression = True
+
                 conn.execute(
-                    "INSERT INTO benchmarks (run_id, name, metric, value, unit) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (run_id, b["fullname"], metric, value, unit),
+                    """
+                    INSERT INTO benchmarks
+                        (run_id, name, metric, value, unit, baseline, delta_pct)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (run_id, b["fullname"], metric, value, unit, baseline, delta_pct),
                 )
+
+        # Update run status if regressions found.
+        if has_regression:
+            conn.execute(
+                "UPDATE runs SET status = 'regressed' WHERE id = ?",
+                (run_id,),
+            )
 
     return run_id

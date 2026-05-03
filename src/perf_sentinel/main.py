@@ -1,7 +1,9 @@
 """Perf Sentinel — AI-powered CI performance observability."""
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from .db import init_db, connect
@@ -16,7 +18,46 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Perf Sentinel", version="0.1.0", lifespan=lifespan)
 
+TEMPLATES_DIR = Path(__file__).parent / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
+
+# ─── HTML routes ─────────────────────────────────────────────────────────────
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    with connect() as conn:
+        runs = conn.execute(
+            "SELECT * FROM runs ORDER BY started_at DESC LIMIT 50"
+        ).fetchall()
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "runs": [dict(r) for r in runs]},
+    )
+
+
+@app.get("/runs/{run_id}", response_class=HTMLResponse)
+def run_detail(request: Request, run_id: str):
+    with connect() as conn:
+        run = conn.execute(
+            "SELECT * FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if not run:
+            raise HTTPException(status_code=404, detail="run not found")
+        benchmarks = conn.execute(
+            "SELECT * FROM benchmarks WHERE run_id = ? ORDER BY name, metric",
+            (run_id,),
+        ).fetchall()
+    return templates.TemplateResponse(
+        "run_detail.html",
+        {
+            "request": request,
+            "run": dict(run),
+            "benchmarks": [dict(b) for b in benchmarks],
+        },
+    )
+
+
+# ─── JSON API routes (kept for the agent in Session 3) ───────────────────────
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -54,13 +95,12 @@ async def ingest(
     return IngestResponse(run_id=run_id, benchmark_count=count)
 
 
-@app.get("/runs")
+@app.get("/api/runs")
 def list_runs(target: str | None = None, limit: int = 20):
     with connect() as conn:
         if target:
             rows = conn.execute(
-                "SELECT * FROM runs WHERE target = ? "
-                "ORDER BY started_at DESC LIMIT ?",
+                "SELECT * FROM runs WHERE target = ? ORDER BY started_at DESC LIMIT ?",
                 (target, limit),
             ).fetchall()
         else:
@@ -71,8 +111,8 @@ def list_runs(target: str | None = None, limit: int = 20):
     return [dict(r) for r in rows]
 
 
-@app.get("/runs/{run_id}")
-def get_run(run_id: str):
+@app.get("/api/runs/{run_id}")
+def get_run_api(run_id: str):
     with connect() as conn:
         run = conn.execute(
             "SELECT * FROM runs WHERE id = ?", (run_id,)

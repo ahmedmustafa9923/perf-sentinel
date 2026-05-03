@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ run.id }} · Perf Sentinel{% endblock %}
+{% block content %}
+
+<div class="panel">
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <div>
+      <span class="badge badge-{{ run.status }}">{{ run.status }}</span>
+      <span class="mono" style="margin-left:8px;">{{ run.id }}</span>
+    </div>
+    <a href="/">← All runs</a>
+  </div>
+  <div style="margin-top:12px; color: var(--muted);">
+    <span class="mono">{{ run.target }}</span> ·
+    <span class="mono">{{ run.branch or '-' }}</span> ·
+    <span class="mono">{{ run.started_at[:19].replace('T', ' ') }}</span>
+  </div>
+</div>
+
+<div class="panel">
+  <h3 style="margin-top:0">Benchmarks</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Test</th>
+        <th>Metric</th>
+        <th style="text-align:right">Value</th>
+        <th style="text-align:right">Baseline</th>
+        <th style="text-align:right">Δ%</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in benchmarks %}
+      <tr>
+        <td class="mono" style="font-size:12px;">{{ b.name.split('::')[-1] }}</td>
+        <td class="mono">{{ b.metric }}</td>
+        <td class="mono" style="text-align:right">{{ '%.2f' % b.value }} {{ b.unit }}</td>
+        <td class="mono" style="text-align:right; color:var(--muted)">
+          {% if b.baseline is not none %}{{ '%.2f' % b.baseline }}{% else %}—{% endif %}
+        </td>
+        <td class="mono" style="text-align:right">
+          {% if b.delta_pct is none %}
+            <span class="delta-flat">—</span>
+          {% elif b.delta_pct > 10 %}
+            <span class="delta-up">+{{ '%.1f' % b.delta_pct }}%</span>
+          {% elif b.delta_pct < -10 %}
+            <span class="delta-down">{{ '%.1f' % b.delta_pct }}%</span>
+          {% else %}
+            <span class="delta-flat">{{ '%+.1f' % b.delta_pct }}%</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
